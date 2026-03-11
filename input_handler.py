@@ -109,6 +109,7 @@ def create_prompt_session(project_root: str, extensions: list[str], exclude_dirs
         completer=completer,
         multiline=True,
         complete_while_typing=False,  # Chỉ complete khi nhấn Tab
+        reserve_space_for_menu=4,
     )
 
     return session, completer
@@ -117,33 +118,54 @@ def create_prompt_session(project_root: str, extensions: list[str], exclude_dirs
 def get_multiline_input(session: PromptSession) -> str:
     """Lấy input từ user với multi-line support."""
     try:
-        text = session.prompt("🤖 Câu hỏi:\n> ")
+        # Dùng prompt 1 dòng để tránh lỗi render trên Git Bash/MINGW
+        print("\n🤖 Câu hỏi:")
+        text = session.prompt("> ")
         return text.strip()
     except (KeyboardInterrupt, EOFError):
         return None
 
 
-def parse_file_references(text: str, project_root: str) -> tuple[str, str]:
+def parse_file_references(text: str, project_root: str, extensions: list = None, exclude_dirs: list = None) -> tuple:
     """
     Tìm tất cả @<file_path> trong text.
-    Trả về (câu_hỏi_đã_xóa_ref, nội_dung_files_ghép_lại).
+    Hỗ trợ:
+      - @file.py       → đính kèm 1 file
+      - @all            → đính kèm tất cả code files (theo extensions config)
+      - @*.py           → đính kèm tất cả files .py
 
-    Ví dụ:
-        Input:  "cập nhật @GEMINI.md cho dễ đọc hơn"
-        Output: ("cập nhật GEMINI.md cho dễ đọc hơn",
-                 "### File: GEMINI.md\n```\n<nội dung file>\n```\n")
+    Trả về (câu_hỏi_đã_xóa_ref, nội_dung_files_ghép_lại).
     """
     root = Path(project_root).resolve()
+    if extensions is None:
+        extensions = [".py"]
+    if exclude_dirs is None:
+        exclude_dirs = []
 
     # Tìm tất cả @<path> (path không chứa khoảng trắng)
-    pattern = r"@([\w\-\.\/\\]+)"
+    pattern = r"@([\w\-\.\/\\*]+)"
     matches = re.findall(pattern, text)
 
     if not matches:
         return text, ""
 
     file_contents = []
+
     for match in matches:
+        # @all → gửi tất cả code files theo extensions config
+        if match.lower() == "all":
+            print(f"[INFO] @all: Đính kèm tất cả code files...")
+            _attach_glob_files(root, extensions, exclude_dirs, file_contents)
+            continue
+
+        # @*.py → gửi tất cả files theo extension
+        if match.startswith("*."):
+            ext = "." + match[2:]  # "*.py" → ".py"
+            print(f"[INFO] @{match}: Đính kèm tất cả files {ext}...")
+            _attach_glob_files(root, [ext], exclude_dirs, file_contents)
+            continue
+
+        # @file.py → gửi 1 file cụ thể
         file_path = root / match
         if file_path.exists() and file_path.is_file():
             try:
@@ -157,6 +179,29 @@ def parse_file_references(text: str, project_root: str) -> tuple[str, str]:
             print(f"[WARN] File không tồn tại: {match}")
 
     # Xóa @prefix nhưng giữ tên file trong câu hỏi
-    clean_text = re.sub(r"@([\w\-\.\/\\]+)", r"\1", text)
+    clean_text = re.sub(r"@([\w\-\.\/\\*]+)", r"\1", text)
 
     return clean_text, "\n".join(file_contents)
+
+
+def _attach_glob_files(root: Path, extensions: list, exclude_dirs: list, file_contents: list):
+    """Helper: quét và đính kèm tất cả files matching extensions."""
+    count = 0
+    for file_path in sorted(root.rglob("*")):
+        if any(excluded in file_path.parts for excluded in exclude_dirs):
+            continue
+        if not file_path.is_file():
+            continue
+        if file_path.suffix not in extensions:
+            continue
+        try:
+            rel = str(file_path.relative_to(root)).replace("\\", "/")
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            file_block = f"### File: {rel}\n```\n{content}\n```\n"
+            file_contents.append(file_block)
+            count += 1
+            print(f"  📄 {rel} ({len(content)} ký tự)")
+        except Exception:
+            pass
+    print(f"[INFO] Tổng: {count} files đính kèm")
+

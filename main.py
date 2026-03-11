@@ -172,33 +172,33 @@ def send_prompt(page: Page, config: dict, prompt: str):
     query_selector_input = config.get("query_selector_input", "")
     if query_selector_input:
         print(f"[INFO] Dùng Javascript selector '{query_selector_input}' để điền text...")
-        # Truyền arguments vào Playwright evaluate, thay vì mix JS với Python f-strings
-        js_code = """
+        # Cách 1: Dùng clipboard paste — tương thích ProseMirror/ContentEditable
+        # Focus vào element rồi paste qua Playwright API
+        js_focus = """
         (args) => {
             const el = document.querySelector(args.selector);
             if (el) {
-                // Hỗ trợ cả input/textarea (.value) và thẻ div contenteditable (.innerHTML)
+                el.focus();
+                // Xóa nội dung cũ
                 if (el.isContentEditable) {
-                    el.innerHTML = ''; // Clear text cũ
-                    // Thay thế newline text thành thẻ <br> hoặc <p> tuỳ editor
-                    const paragraphs = args.prompt.split('\\n');
-                    for (const p of paragraphs) {
-                        const div = document.createElement('p');
-                        div.innerText = p;
-                        el.appendChild(div);
-                    }
+                    el.innerHTML = '<p><br></p>';
                 } else {
-                    el.value = args.prompt;
+                    el.value = '';
                 }
-                
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            } else {
-                console.error("No element found for selector: " + args.selector);
+                return true;
             }
+            return false;
         }
         """
-        page.evaluate(js_code, {"selector": query_selector_input, "prompt": prompt})
+        found = page.evaluate(js_focus, {"selector": query_selector_input})
+        if found:
+            # Dùng Ctrl+A → xóa → paste qua clipboard
+            page.keyboard.press("Control+a")
+            time.sleep(0.1)
+            # Gửi text qua keyboard.insert_text (Playwright tự xử lý input events)
+            page.keyboard.insert_text(prompt)
+        else:
+            print(f"[WARN] Không tìm thấy element: {query_selector_input}")
     else:
         # Nhập text - dùng fill() cho nhanh
         # Nếu fill() không hoạt động (vì textarea dùng contenteditable),
@@ -279,7 +279,7 @@ def interactive_loop(page: Page, config: dict, context: str, retriever=None):
         print("  Gõ 'reindex' để cập nhật index code (RAG)")
     else:
         print("  Gõ 'context' để xem project context đã load")
-    print("  Dùng @<tên file> để đính kèm file vào câu hỏi")
+    print("  Dùng @<file> đính kèm file | @all gửi tất cả code | @*.py gửi theo ext")
     print("  Alt+Enter (hoặc Esc rồi Enter) = xuống dòng | Enter = gửi")
     print("=" * 60 + "\n")
 
@@ -319,7 +319,11 @@ def interactive_loop(page: Page, config: dict, context: str, retriever=None):
             continue
 
         # Xử lý @file reference: tách file được ref và đọc nội dung
-        clean_question, file_context = parse_file_references(question, project_root)
+        clean_question, file_context = parse_file_references(
+            question, project_root,
+            extensions=config.get("file_extensions", [".py"]),
+            exclude_dirs=config.get("exclude_dirs", [])
+        )
 
         # Nếu có @file, ưu tiên context từ file được ref
         if file_context:
