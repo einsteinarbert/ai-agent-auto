@@ -257,6 +257,57 @@ def wait_and_get_response(page: Page, config: dict) -> str:
     return previous_text
 
 
+def ask_offline_llm(prompt: str, offline_config: dict):
+    """Gửi câu hỏi tới Local LLM (Ollama) khi ChatGPT bị lỗi/timeout."""
+    import urllib.request
+    import urllib.error
+    import subprocess
+    
+    url = offline_config.get("api_url", "http://localhost:11434/api/generate")
+    model = offline_config.get("model_name", "llama3.2:1b")
+    
+    # Tự động kéo model nếu chưa có (chạy ngầm ollama pull)
+    print(f"\n[INFO] Kiểm tra Local LLM model '{model}'...")
+    try:
+        # Kiểm tra xem ollama đã có trong máy chưa
+        subprocess.run(["ollama", "--version"], capture_output=True, check=True)
+        # Pull model (nếu có rồi sẽ qua rất nhanh, chưa có sẽ tải)
+        print(f"[INFO] Vui lòng chờ... Đang đảm bảo model '{model}' đã được tải (quá trình này có thể mất vài phút nếu tải lần đầu).")
+        subprocess.run(["ollama", "pull", model], capture_output=True, check=True)
+    except FileNotFoundError:
+        print("[ERROR] Không tìm thấy lệnh 'ollama'. Bạn cần cài đặt Ollama từ https://ollama.com/")
+        return
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] Không thể pull model '{model}': {e.stderr.decode('utf-8') if e.stderr else str(e)}")
+        return
+    
+    print(f"[INFO] Đang gửi câu hỏi tới Local LLM ({model}) qua Ollama API...")
+    
+    data = json.dumps({
+        "model": model,
+        "prompt": prompt,
+        "stream": True
+    }).encode('utf-8')
+    
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            print("\n" + "─" * 60)
+            print("📝 Offline Response (Local LLM):")
+            print("─" * 60)
+            for line in response:
+                if line:
+                    chunk = json.loads(line.decode('utf-8'))
+                    print(chunk.get("response", ""), end="", flush=True)
+            print("\n" + "─" * 60)
+    except urllib.error.URLError as e:
+        print(f"\n[ERROR] Không thể kết nối tới Ollama: {e}")
+        print("[INFO] Đảm bảo đã chạy 'ollama serve' và tải đúng model (ví dụ: ollama pull llama3.2:1b).")
+    except Exception as e:
+        print(f"\n[ERROR] Lỗi gọi Ollama API: {e}")
+
+
 # ─────────────────────────────────────────────
 # Agent Loop
 # ─────────────────────────────────────────────
@@ -358,7 +409,17 @@ def interactive_loop(page: Page, config: dict, context: str, retriever=None):
 
             conversation_count += 1
         except Exception as e:
-            print(f"\n[ERROR] Lỗi khi gửi/nhận: {e}")
+            print(f"\n[ERROR] Lỗi khi gửi/nhận qua ChatGPT: {e}")
+            
+            offline_config = config.get("offline_mode", {})
+            if offline_config.get("enabled", False):
+                model_name = offline_config.get("model_name", "llama3.2:1b")
+                ans = input(f"\n[?] ChatGPT bị lỗi/timeout! Bạn có muốn dùng Local LLM ({model_name}) để trả lời không? (y/n): ")
+                if ans.strip().lower() == 'y':
+                    ask_offline_llm(prompt, offline_config)
+                    conversation_count += 1
+                    continue
+            
             print("[INFO] Thử lại hoặc gõ 'quit' để thoát.")
 
 

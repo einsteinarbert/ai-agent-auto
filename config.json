@@ -32,10 +32,15 @@
     "max_context_chars": 100000,
     "rag": {
         "enabled": true,
-        "model_name": "all-MiniLM-L6-v2",
+        "model_name": "llama3.2:3b",
         "top_k": 5,
         "chunk_max_lines": 500,
         "max_distance": 1.2,
         "chroma_persist_dir": ".chroma_db"
+    },
+    "offline_mode": {
+        "enabled": true,
+        "model_name": "llama3.2:3b",
+        "api_url": "http://localhost:11434/api/generate"
     }
 }
