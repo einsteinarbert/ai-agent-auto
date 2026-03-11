@@ -1,1 +1,4 @@
 playwright>=1.40.0
+sentence-transformers
+chromadb
+tqdm

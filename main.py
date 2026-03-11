@@ -225,12 +225,15 @@ def wait_and_get_response(page: Page, config: dict) -> str:
 # Agent Loop
 # ─────────────────────────────────────────────
 
-def interactive_loop(page: Page, config: dict, context: str):
+def interactive_loop(page: Page, config: dict, context: str, retriever=None):
     """Vòng lặp hỏi-đáp tương tác."""
     print("\n" + "=" * 60)
     print("  AI Agent - ChatGPT Nội Bộ")
     print("  Gõ 'quit' hoặc 'exit' để thoát")
-    print("  Gõ 'context' để xem project context đã load")
+    if retriever:
+        print("  Gõ 'reindex' để cập nhật index code (RAG)")
+    else:
+        print("  Gõ 'context' để xem project context đã load")
     print("=" * 60 + "\n")
 
     conversation_count = 0
@@ -249,13 +252,31 @@ def interactive_loop(page: Page, config: dict, context: str):
             print("[INFO] Thoát agent.")
             break
 
-        if question.lower() == "context":
+        if question.lower() == "context" and not retriever:
             print(f"\n📄 Project context ({len(context)} ký tự):")
             print(context[:2000] + "..." if len(context) > 2000 else context)
             continue
 
-        # Chỉ gửi context ở câu hỏi đầu tiên (hoặc khi user yêu cầu)
-        if conversation_count == 0 and context:
+        if question.lower() == "reindex" and retriever:
+            print("[INFO] Đang chạy lại indexer...")
+            from context_indexer import ProjectIndexer
+            rag_config = config.get("rag", {})
+            indexer = ProjectIndexer(rag_config.get("chroma_persist_dir", ".chroma_db"), rag_config.get("model_name", "all-MiniLM-L6-v2"))
+            indexer.index_project(
+                root_dir=config.get("project_root", "."),
+                extensions=config.get("file_extensions", [".py"]),
+                exclude_dirs=config.get("exclude_dirs", []),
+                chunk_max_lines=rag_config.get("chunk_max_lines", 500)
+            )
+            print("[INFO] ✓ Re-index hoàn tất.")
+            continue
+
+        # Với RAG, ta gửi câu nào cũng kèm context liên quan. Không RAG thì chỉ gửi câu đầu.
+        if retriever:
+            rag_context = retriever.search(question, top_k=config.get("rag", {}).get("top_k", 5))
+            prompt = build_prompt(rag_context, question)
+            print(f"[INFO] Dùng RAG: Đã gửi các chunks liên quan từ ChromaDB.")
+        elif conversation_count == 0 and context:
             prompt = build_prompt(context, question)
             print(f"[INFO] Gửi kèm project context ({len(context)} ký tự)")
         else:
@@ -304,19 +325,43 @@ def main():
     # Load config
     config = load_config(args.config)
 
-    # Đọc project context
+    # Đọc project context hoặc khởi tạo RAG
     context = ""
+    retriever = None
     if not args.no_context:
         project_root = args.project or config.get("project_root", ".")
-        print(f"[INFO] Đang đọc project context từ: {project_root}")
-        context = read_project_context(
-            root_dir=project_root,
-            extensions=config.get("file_extensions", [".py"]),
-            exclude_dirs=config.get("exclude_dirs", []),
-            max_chars=config.get("max_context_chars", 100000),
-        )
-        file_count = context.count("### File:")
-        print(f"[INFO] ✓ Đã đọc {file_count} files ({len(context)} ký tự)")
+        rag_config = config.get("rag", {})
+        
+        if rag_config.get("enabled", False):
+            print(f"[INFO] RAG đang bật. Chạy indexer trên {project_root}...")
+            from context_indexer import ProjectIndexer
+            from context_retriever import ContextRetriever
+            
+            persist_dir = rag_config.get("chroma_persist_dir", ".chroma_db")
+            model_name = rag_config.get("model_name", "all-MiniLM-L6-v2")
+            
+            # Step 1: Index
+            indexer = ProjectIndexer(persist_dir, model_name)
+            indexer.index_project(
+                root_dir=project_root,
+                extensions=config.get("file_extensions", [".py"]),
+                exclude_dirs=config.get("exclude_dirs", []),
+                chunk_max_lines=rag_config.get("chunk_max_lines", 500)
+            )
+            
+            # Step 2: Retriever
+            retriever = ContextRetriever(persist_dir, model_name)
+            print("[INFO] ✓ RAG đã sẵn sàng.")
+        else:
+            print(f"[INFO] RAG đang tắt. Đọc toàn bộ project context từ: {project_root}")
+            context = read_project_context(
+                root_dir=project_root,
+                extensions=config.get("file_extensions", [".py"]),
+                exclude_dirs=config.get("exclude_dirs", []),
+                max_chars=config.get("max_context_chars", 100000),
+            )
+            file_count = context.count("### File:")
+            print(f"[INFO] ✓ Đã đọc {file_count} files ({len(context)} ký tự)")
 
     # Mở browser
     pw, browser_ctx, page = open_browser(config)
@@ -332,14 +377,18 @@ def main():
 
         if args.question:
             # Single-shot mode
-            prompt = build_prompt(context, args.question)
+            if retriever:
+                rag_context = retriever.search(args.question, top_k=config.get("rag", {}).get("top_k", 5))
+                prompt = build_prompt(rag_context, args.question)
+            else:
+                prompt = build_prompt(context, args.question)
             send_prompt(page, config, prompt)
             response = wait_and_get_response(page, config)
             print("\n📝 Response:")
             print(response)
         else:
             # Interactive mode
-            interactive_loop(page, config, context)
+            interactive_loop(page, config, context, retriever)
     except KeyboardInterrupt:
         print("\n[INFO] Thoát agent.")
     finally:
