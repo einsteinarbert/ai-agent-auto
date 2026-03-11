@@ -92,7 +92,7 @@ def read_project_context(
 
 def build_prompt(context: str, question: str) -> str:
     """Ghép project context + câu hỏi thành prompt hoàn chỉnh."""
-    if context and context.strip() != "(Không tìm thấy source file nào trong project)":
+    if context and "Không tìm thấy" not in context:
         return (
             f"Đây là source code của project:\n"
             f"{context}\n\n"
@@ -164,15 +164,46 @@ def send_prompt(page: Page, config: dict, prompt: str):
     page.click(selector)
     time.sleep(0.3)
 
-    # Nhập text - dùng fill() cho nhanh
-    # Nếu fill() không hoạt động (vì textarea dùng contenteditable),
-    # thử type() thay thế
-    try:
-        page.fill(selector, prompt)
-    except Exception:
-        # Fallback: dùng keyboard type cho contenteditable elements
-        page.click(selector)
-        page.keyboard.insert_text(prompt)
+    query_selector_input = config.get("query_selector_input", "")
+    if query_selector_input:
+        print(f"[INFO] Dùng Javascript selector '{query_selector_input}' để điền text...")
+        # Truyền arguments vào Playwright evaluate, thay vì mix JS với Python f-strings
+        js_code = """
+        (args) => {
+            const el = document.querySelector(args.selector);
+            if (el) {
+                // Hỗ trợ cả input/textarea (.value) và thẻ div contenteditable (.innerHTML)
+                if (el.isContentEditable) {
+                    el.innerHTML = ''; // Clear text cũ
+                    // Thay thế newline text thành thẻ <br> hoặc <p> tuỳ editor
+                    const paragraphs = args.prompt.split('\\n');
+                    for (const p of paragraphs) {
+                        const div = document.createElement('p');
+                        div.innerText = p;
+                        el.appendChild(div);
+                    }
+                } else {
+                    el.value = args.prompt;
+                }
+                
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            } else {
+                console.error("No element found for selector: " + args.selector);
+            }
+        }
+        """
+        page.evaluate(js_code, {"selector": query_selector_input, "prompt": prompt})
+    else:
+        # Nhập text - dùng fill() cho nhanh
+        # Nếu fill() không hoạt động (vì textarea dùng contenteditable),
+        # thử type() thay thế
+        try:
+            page.fill(selector, prompt)
+        except Exception:
+            # Fallback: dùng keyboard type cho contenteditable elements
+            page.click(selector)
+            page.keyboard.insert_text(prompt)
 
     time.sleep(0.5)
 
@@ -273,9 +304,17 @@ def interactive_loop(page: Page, config: dict, context: str, retriever=None):
 
         # Với RAG, ta gửi câu nào cũng kèm context liên quan. Không RAG thì chỉ gửi câu đầu.
         if retriever:
-            rag_context = retriever.search(question, top_k=config.get("rag", {}).get("top_k", 5))
+            rag_config = config.get("rag", {})
+            rag_context = retriever.search(
+                question, 
+                top_k=rag_config.get("top_k", 5),
+                max_distance=rag_config.get("max_distance", 1.4)
+            )
             prompt = build_prompt(rag_context, question)
-            print(f"[INFO] Dùng RAG: Đã gửi các chunks liên quan từ ChromaDB.")
+            if "Không tìm thấy" in rag_context:
+                print("[INFO] RAG: Câu hỏi không liên quan đến source code. Đã skip context.")
+            else:
+                print(f"[INFO] Dùng RAG: Đã gửi các chunks liên quan từ ChromaDB.")
         elif conversation_count == 0 and context:
             prompt = build_prompt(context, question)
             print(f"[INFO] Gửi kèm project context ({len(context)} ký tự)")
@@ -378,7 +417,12 @@ def main():
         if args.question:
             # Single-shot mode
             if retriever:
-                rag_context = retriever.search(args.question, top_k=config.get("rag", {}).get("top_k", 5))
+                rag_config = config.get("rag", {})
+                rag_context = retriever.search(
+                    args.question, 
+                    top_k=rag_config.get("top_k", 5),
+                    max_distance=rag_config.get("max_distance", 1.4)
+                )
                 prompt = build_prompt(rag_context, args.question)
             else:
                 prompt = build_prompt(context, args.question)

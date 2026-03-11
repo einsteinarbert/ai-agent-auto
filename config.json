@@ -1,6 +1,7 @@
 {
     "chatgpt_url": "https://chatgpt.com",
     "prompt_selector": "#prompt-textarea",
+    "query_selector_input": "#prompt-textarea",
     "send_key": "Enter",
     "response_selector": ".markdown.prose",
     "wait_timeout": 60000,
@@ -17,7 +18,8 @@
         ".c",
         ".cpp",
         ".h",
-        ".rs"
+        ".rs",
+        ".md"
     ],
     "exclude_dirs": [
         "node_modules",
@@ -34,6 +36,7 @@
         "model_name": "all-MiniLM-L6-v2",
         "top_k": 5,
         "chunk_max_lines": 500,
+        "max_distance": 1.4,
         "chroma_persist_dir": ".chroma_db"
     }
 }

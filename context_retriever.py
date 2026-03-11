@@ -18,24 +18,31 @@ class ContextRetriever:
         self.model = SentenceTransformer(model_name)
         print(f"[RAG] Model loaded.")
 
-    def search(self, query: str, top_k: int = 5) -> str:
+    def search(self, query: str, top_k: int = 5, max_distance: float = 1.4) -> str:
         # Nhúng câu hỏi thành vector
         query_embedding = self.model.encode(query).tolist()
         
-        # Query DB lấy top K chunks
+        # Query DB lấy top K chunks kèm distance
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k
+            n_results=top_k,
+            include=["documents", "distances"]
         )
         
-        # Gộp kết quả
-        documents = results["documents"][0] if results and "documents" in results and results["documents"] else []
-        
-        if not documents:
+        # Kiểm tra kết quả
+        if not results or "documents" not in results or not results["documents"]:
             return "(Không tìm thấy context liên quan)"
             
+        documents = results["documents"][0]
+        distances = results["distances"][0] if "distances" in results and results["distances"] else []
+        
         context_parts = []
-        for doc in documents:
-            context_parts.append(doc)
+        for i, doc in enumerate(documents):
+            # Lọc theo max_distance để tránh gửi lố context (câu hỏi không liên quan code)
+            if i < len(distances) and distances[i] <= max_distance:
+                context_parts.append(doc)
+            
+        if not context_parts:
+            return "(Không tìm thấy context có độ tương đồng đủ cao với câu hỏi)"
             
         return "\n".join(context_parts)
