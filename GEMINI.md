@@ -318,13 +318,76 @@ và chạy lại agent.
 
 ## Model download chậm
 
-SentenceTransformer sẽ download model lần đầu:
+SentenceTransformer sẽ download model lần đầu (~90-470MB tuỳ model).
 
-```
-all-MiniLM-L6-v2
+Xem danh sách models:
+
+```bash
+python models.py
 ```
 
-Dung lượng ~90MB.
+---
+
+# 11. Các model hỗ trợ
+
+## Embedding Models (cho RAG)
+
+Dùng để tìm code liên quan. Đổi trong `config.json` → `rag.model_name`:
+
+### sentence-transformers (Python, tự chạy)
+
+| Model | Size | Đặc điểm |
+|-------|------|----------|
+| `all-MiniLM-L6-v2` ⭐ | 80MB | Mặc định, nhanh, phù hợp CPU yếu |
+| `all-MiniLM-L12-v2` | 120MB | Tốt hơn L6, chậm hơn ~30% |
+| `BAAI/bge-small-en-v1.5` | 130MB | Chất lượng cao, ranking tốt |
+| `BAAI/bge-base-en-v1.5` | 420MB | Tốt nhất cho CPU |
+| `paraphrase-multilingual-MiniLM-L12-v2` | 470MB | Hỗ trợ tiếng Việt + 50 ngôn ngữ |
+
+### Ollama Embedding (cần cài [Ollama](https://ollama.com))
+
+| Model | Size | Đặc điểm | GPU |
+|-------|------|----------|-----|
+| `nomic-embed-text` | 274MB | Embedding mạnh, nhanh | ❌ Không cần |
+| `mxbai-embed-large` | 670MB | Chất lượng cao nhất | ⚙️ Khuyên dùng GPU (VRAM ≥4GB) |
+| `snowflake-arctic-embed` | 670MB | Tốt cho tìm kiếm code | ⚙️ Khuyên dùng GPU (VRAM ≥4GB) |
+
+**Cách switch model:**
+
+```json
+{
+  "rag": {
+    "model_name": "BAAI/bge-small-en-v1.5"
+  }
+}
+```
+
+> ⚠️ Sau khi đổi model, cần xóa `.chroma_db/` và chạy lại để re-index.
+
+## LLM Models (cho suy luận - dự phòng tương lai)
+
+Các model này KHÔNG dùng cho RAG, mà cho reasoning/tóm tắt:
+
+### Transformers (Python, tự chạy)
+
+| Model | Size | RAM | GPU | Đặc điểm |
+|-------|------|-----|-----|----------|
+| `Qwen/Qwen2-0.5B` | 1GB | 2GB | ❌ Không cần | Siêu nhẹ |
+| `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | 2.2GB | 4GB | ❌ Không cần | Nhẹ, chạy được CPU |
+| `microsoft/phi-2` | 5.4GB | 8GB | ⚙️ Nên có | Hiểu code tốt |
+
+### Ollama LLM (cần cài [Ollama](https://ollama.com))
+
+| Model | Size | VRAM | GPU | Đặc điểm |
+|-------|------|------|-----|----------|
+| `llama3.2:1b` | 1.3GB | 2GB | ❌ Không cần | Nhẹ nhất, chạy được CPU |
+| `phi3:mini` | 2.3GB | 4GB | ⚙️ Khuyên dùng | Tốt cho code |
+| `llama3.2:3b` | 2GB | 4GB | ⚙️ Khuyên dùng | Cân bằng chất lượng/tốc độ |
+| `mistral:7b` | 4.1GB | 8GB | ⚠️ **Bắt buộc** | Rất mạnh, hiểu context tốt |
+| `codellama:7b` | 3.8GB | 8GB | ⚠️ **Bắt buộc** | Chuyên cho code |
+| `deepseek-coder:6.7b` | 3.8GB | 8GB | ⚠️ **Bắt buộc** | Code-first, mạnh nhất |
+
+> ⚠️ **GPU = NVIDIA GPU với VRAM tối thiểu như bảng.** Các model 7B trở lên **bắt buộc** có GPU, không chạy được trên CPU thuần.
 
 ---
 
@@ -394,3 +457,54 @@ Nếu bạn muốn, tôi có thể **viết thêm phiên bản GUIDE.md "chuẩn
 * Performance tips
 
 (guide này sẽ **xịn hơn README của nhiều repo AI agent trên GitHub**).
+
+---
+
+# 14. Cài đặt Ollama
+
+Ollama cho phép chạy các model AI (embedding + LLM) trên máy local.
+
+## Windows
+
+1. Tải installer: [https://ollama.com/download/windows](https://ollama.com/download/windows)
+2. Chạy file `.exe`, cài đặt theo hướng dẫn
+3. Mở terminal, kiểm tra:
+
+```bash
+ollama --version
+```
+
+4. Pull model cần dùng:
+
+```bash
+ollama pull nomic-embed-text       # Embedding (274MB)
+ollama pull llama3.2:1b            # LLM nhẹ (1.3GB)
+```
+
+## Ubuntu / Linux
+
+```bash
+# Cài Ollama (1 lệnh)
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Kiểm tra
+ollama --version
+
+# Pull model
+ollama pull nomic-embed-text
+ollama pull llama3.2:1b
+```
+
+## Kiểm tra model đã cài
+
+```bash
+ollama list
+```
+
+## Xóa model không dùng
+
+```bash
+ollama rm <tên_model>
+```
+
+> ⚠️ Ollama chạy server ở background (port 11434). Kiểm tra: `curl http://localhost:11434`
