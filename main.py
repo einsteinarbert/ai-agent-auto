@@ -17,6 +17,11 @@ import sys
 import time
 from pathlib import Path
 
+# Patch asyncio để cho phép nested event loops
+# (Playwright và prompt_toolkit đều dùng asyncio, cần cho phép chạy lồng nhau)
+import nest_asyncio
+nest_asyncio.apply()
+
 from playwright.sync_api import sync_playwright, Page, Browser
 
 
@@ -92,7 +97,7 @@ def read_project_context(
 
 def build_prompt(context: str, question: str) -> str:
     """Ghép project context + câu hỏi thành prompt hoàn chỉnh."""
-    if context and context.strip() != "(Không tìm thấy source file nào trong project)":
+    if context and "Không tìm thấy" not in context:
         return (
             f"Đây là source code của project:\n"
             f"{context}\n\n"
@@ -164,15 +169,46 @@ def send_prompt(page: Page, config: dict, prompt: str):
     page.click(selector)
     time.sleep(0.3)
 
-    # Nhập text - dùng fill() cho nhanh
-    # Nếu fill() không hoạt động (vì textarea dùng contenteditable),
-    # thử type() thay thế
-    try:
-        page.fill(selector, prompt)
-    except Exception:
-        # Fallback: dùng keyboard type cho contenteditable elements
-        page.click(selector)
-        page.keyboard.insert_text(prompt)
+    query_selector_input = config.get("query_selector_input", "")
+    if query_selector_input:
+        print(f"[INFO] Dùng Javascript selector '{query_selector_input}' để điền text...")
+        # Cách 1: Dùng clipboard paste — tương thích ProseMirror/ContentEditable
+        # Focus vào element rồi paste qua Playwright API
+        js_focus = """
+        (args) => {
+            const el = document.querySelector(args.selector);
+            if (el) {
+                el.focus();
+                // Xóa nội dung cũ
+                if (el.isContentEditable) {
+                    el.innerHTML = '<p><br></p>';
+                } else {
+                    el.value = '';
+                }
+                return true;
+            }
+            return false;
+        }
+        """
+        found = page.evaluate(js_focus, {"selector": query_selector_input})
+        if found:
+            # Dùng Ctrl+A → xóa → paste qua clipboard
+            page.keyboard.press("Control+a")
+            time.sleep(0.1)
+            # Gửi text qua keyboard.insert_text (Playwright tự xử lý input events)
+            page.keyboard.insert_text(prompt)
+        else:
+            print(f"[WARN] Không tìm thấy element: {query_selector_input}")
+    else:
+        # Nhập text - dùng fill() cho nhanh
+        # Nếu fill() không hoạt động (vì textarea dùng contenteditable),
+        # thử type() thay thế
+        try:
+            page.fill(selector, prompt)
+        except Exception:
+            # Fallback: dùng keyboard type cho contenteditable elements
+            page.click(selector)
+            page.keyboard.insert_text(prompt)
 
     time.sleep(0.5)
 
@@ -225,20 +261,33 @@ def wait_and_get_response(page: Page, config: dict) -> str:
 # Agent Loop
 # ─────────────────────────────────────────────
 
-def interactive_loop(page: Page, config: dict, context: str):
+def interactive_loop(page: Page, config: dict, context: str, retriever=None):
     """Vòng lặp hỏi-đáp tương tác."""
+    from input_handler import create_prompt_session, get_multiline_input, parse_file_references
+
+    project_root = config.get("project_root", ".")
+    session, completer = create_prompt_session(
+        project_root=project_root,
+        extensions=config.get("file_extensions", [".py"]),
+        exclude_dirs=config.get("exclude_dirs", [])
+    )
+
     print("\n" + "=" * 60)
     print("  AI Agent - ChatGPT Nội Bộ")
     print("  Gõ 'quit' hoặc 'exit' để thoát")
-    print("  Gõ 'context' để xem project context đã load")
+    if retriever:
+        print("  Gõ 'reindex' để cập nhật index code (RAG)")
+    else:
+        print("  Gõ 'context' để xem project context đã load")
+    print("  Dùng @<file> đính kèm file | @all gửi tất cả code | @*.py gửi theo ext")
+    print("  Alt+Enter (hoặc Esc rồi Enter) = xuống dòng | Enter = gửi")
     print("=" * 60 + "\n")
 
     conversation_count = 0
 
     while True:
-        try:
-            question = input("\n🤖 Câu hỏi: ").strip()
-        except (KeyboardInterrupt, EOFError):
+        question = get_multiline_input(session)
+        if question is None:
             print("\n[INFO] Thoát agent.")
             break
 
@@ -249,13 +298,49 @@ def interactive_loop(page: Page, config: dict, context: str):
             print("[INFO] Thoát agent.")
             break
 
-        if question.lower() == "context":
+        if question.lower() == "context" and not retriever:
             print(f"\n📄 Project context ({len(context)} ký tự):")
             print(context[:2000] + "..." if len(context) > 2000 else context)
             continue
 
-        # Chỉ gửi context ở câu hỏi đầu tiên (hoặc khi user yêu cầu)
-        if conversation_count == 0 and context:
+        if question.lower() == "reindex" and retriever:
+            print("[INFO] Đang chạy lại indexer...")
+            from context_indexer import ProjectIndexer
+            rag_config = config.get("rag", {})
+            indexer = ProjectIndexer(rag_config.get("chroma_persist_dir", ".chroma_db"), rag_config.get("model_name", "all-MiniLM-L6-v2"))
+            indexer.index_project(
+                root_dir=config.get("project_root", "."),
+                extensions=config.get("file_extensions", [".py"]),
+                exclude_dirs=config.get("exclude_dirs", []),
+                chunk_max_lines=rag_config.get("chunk_max_lines", 500)
+            )
+            completer.refresh_cache()  # Cập nhật danh sách file
+            print("[INFO] ✓ Re-index hoàn tất.")
+            continue
+
+        # Xử lý @file reference: tách file được ref và đọc nội dung
+        clean_question, file_context = parse_file_references(
+            question, project_root,
+            extensions=config.get("file_extensions", [".py"]),
+            exclude_dirs=config.get("exclude_dirs", [])
+        )
+
+        # Nếu có @file, ưu tiên context từ file được ref
+        if file_context:
+            prompt = build_prompt(file_context, clean_question)
+        elif retriever:
+            rag_config = config.get("rag", {})
+            rag_context = retriever.search(
+                clean_question, 
+                top_k=rag_config.get("top_k", 5),
+                max_distance=rag_config.get("max_distance", 1.4)
+            )
+            prompt = build_prompt(rag_context, clean_question)
+            if "Không tìm thấy" in rag_context:
+                print("[INFO] RAG: Câu hỏi không liên quan đến source code. Đã skip context.")
+            else:
+                print(f"[INFO] Dùng RAG: Đã gửi các chunks liên quan từ ChromaDB.")
+        elif conversation_count == 0 and context:
             prompt = build_prompt(context, question)
             print(f"[INFO] Gửi kèm project context ({len(context)} ký tự)")
         else:
@@ -304,19 +389,43 @@ def main():
     # Load config
     config = load_config(args.config)
 
-    # Đọc project context
+    # Đọc project context hoặc khởi tạo RAG
     context = ""
+    retriever = None
     if not args.no_context:
         project_root = args.project or config.get("project_root", ".")
-        print(f"[INFO] Đang đọc project context từ: {project_root}")
-        context = read_project_context(
-            root_dir=project_root,
-            extensions=config.get("file_extensions", [".py"]),
-            exclude_dirs=config.get("exclude_dirs", []),
-            max_chars=config.get("max_context_chars", 100000),
-        )
-        file_count = context.count("### File:")
-        print(f"[INFO] ✓ Đã đọc {file_count} files ({len(context)} ký tự)")
+        rag_config = config.get("rag", {})
+        
+        if rag_config.get("enabled", False):
+            print(f"[INFO] RAG đang bật. Chạy indexer trên {project_root}...")
+            from context_indexer import ProjectIndexer
+            from context_retriever import ContextRetriever
+            
+            persist_dir = rag_config.get("chroma_persist_dir", ".chroma_db")
+            model_name = rag_config.get("model_name", "all-MiniLM-L6-v2")
+            
+            # Step 1: Index
+            indexer = ProjectIndexer(persist_dir, model_name)
+            indexer.index_project(
+                root_dir=project_root,
+                extensions=config.get("file_extensions", [".py"]),
+                exclude_dirs=config.get("exclude_dirs", []),
+                chunk_max_lines=rag_config.get("chunk_max_lines", 500)
+            )
+            
+            # Step 2: Retriever
+            retriever = ContextRetriever(persist_dir, model_name)
+            print("[INFO] ✓ RAG đã sẵn sàng.")
+        else:
+            print(f"[INFO] RAG đang tắt. Đọc toàn bộ project context từ: {project_root}")
+            context = read_project_context(
+                root_dir=project_root,
+                extensions=config.get("file_extensions", [".py"]),
+                exclude_dirs=config.get("exclude_dirs", []),
+                max_chars=config.get("max_context_chars", 100000),
+            )
+            file_count = context.count("### File:")
+            print(f"[INFO] ✓ Đã đọc {file_count} files ({len(context)} ký tự)")
 
     # Mở browser
     pw, browser_ctx, page = open_browser(config)
@@ -332,14 +441,23 @@ def main():
 
         if args.question:
             # Single-shot mode
-            prompt = build_prompt(context, args.question)
+            if retriever:
+                rag_config = config.get("rag", {})
+                rag_context = retriever.search(
+                    args.question, 
+                    top_k=rag_config.get("top_k", 5),
+                    max_distance=rag_config.get("max_distance", 1.4)
+                )
+                prompt = build_prompt(rag_context, args.question)
+            else:
+                prompt = build_prompt(context, args.question)
             send_prompt(page, config, prompt)
             response = wait_and_get_response(page, config)
             print("\n📝 Response:")
             print(response)
         else:
             # Interactive mode
-            interactive_loop(page, config, context)
+            interactive_loop(page, config, context, retriever)
     except KeyboardInterrupt:
         print("\n[INFO] Thoát agent.")
     finally:
