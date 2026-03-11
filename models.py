@@ -91,35 +91,7 @@ OLLAMA_EMBEDDING_MODELS = [
 
 
 # ──────────────────────────────────────────────
-# LLM Models (cho suy luận / tóm tắt - tương lai)
-# ──────────────────────────────────────────────
-LLM_MODELS = [
-    {
-        "name": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "size_gb": 2.2,
-        "description": "LLM nhỏ nhất, chạy được trên CPU nhưng chậm. Phù hợp test thử.",
-        "min_ram_gb": 4,
-        "language": "English",
-    },
-    {
-        "name": "Qwen/Qwen2-0.5B",
-        "size_gb": 1.0,
-        "description": "LLM siêu nhẹ của Alibaba. Tốt cho tóm tắt ngắn.",
-        "min_ram_gb": 2,
-        "language": "English + Chinese",
-    },
-    {
-        "name": "microsoft/phi-2",
-        "size_gb": 5.4,
-        "description": "LLM mạnh của Microsoft, hiểu code tốt. Cần RAM nhiều hơn.",
-        "min_ram_gb": 8,
-        "language": "English",
-    },
-]
-
-
-# ──────────────────────────────────────────────
-# Ollama LLM Models (cần cài Ollama)
+# Ollama LLM Models (dùng cho Offline Mode - cần cài Ollama)
 # ──────────────────────────────────────────────
 OLLAMA_LLM_MODELS = [
     {
@@ -187,15 +159,8 @@ def list_embedding_models():
 
 
 def list_llm_models():
-    """In danh sách LLM models."""
-    print("\n🧠 LLM Models - Transformers (cho suy luận):")
-    print("-" * 70)
-    for m in LLM_MODELS:
-        print(f"  {m['name']}")
-        print(f"    Size: {m['size_gb']}GB | RAM tối thiểu: {m['min_ram_gb']}GB | {m['description']}")
-        print()
-
-    print("\n🧠 LLM Models - Ollama (cần cài ollama.com):")
+    """In danh sách LLM models (Ollama - cho Offline Mode)."""
+    print("\n🧠 LLM Models - Ollama (cho Offline Mode, cần cài ollama.com):")
     print("-" * 70)
     for m in OLLAMA_LLM_MODELS:
         if m["gpu_required"]:

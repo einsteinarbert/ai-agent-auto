@@ -364,19 +364,9 @@ Dùng để tìm code liên quan. Đổi trong `config.json` → `rag.model_name
 
 > ⚠️ Sau khi đổi model, cần xóa `.chroma_db/` và chạy lại để re-index.
 
-## LLM Models (cho suy luận - dự phòng tương lai)
+## LLM Models (cho Offline Mode - khi ChatGPT bị lỗi/timeout)
 
-Các model này KHÔNG dùng cho RAG, mà cho reasoning/tóm tắt:
-
-### Transformers (Python, tự chạy)
-
-| Model | Size | RAM | GPU | Đặc điểm |
-|-------|------|-----|-----|----------|
-| `Qwen/Qwen2-0.5B` | 1GB | 2GB | ❌ Không cần | Siêu nhẹ |
-| `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | 2.2GB | 4GB | ❌ Không cần | Nhẹ, chạy được CPU |
-| `microsoft/phi-2` | 5.4GB | 8GB | ⚙️ Nên có | Hiểu code tốt |
-
-### Ollama LLM (cần cài [Ollama](https://ollama.com))
+Dùng cho `offline_mode.model_name` trong `config.json`. Cần cài [Ollama](https://ollama.com).
 
 | Model | Size | VRAM | GPU | Đặc điểm |
 |-------|------|------|-----|----------|

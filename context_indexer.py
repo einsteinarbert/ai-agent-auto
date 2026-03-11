@@ -1,9 +1,23 @@
 import os
+import re
 import hashlib
 from pathlib import Path
 from tqdm import tqdm
 import chromadb
 from sentence_transformers import SentenceTransformer
+
+# Keywords dùng chung cho mọi ngôn ngữ lập trình
+# Mỗi keyword là 1 prefix của dòng code (sau khi strip)
+IMPORT_KEYWORDS = [
+    "import ",       # Python, Java, Go, Dart, JS/TS
+    "from ",         # Python (from x import y)
+    "#include",      # C, C++
+    "require(",      # Node.js: require('x')
+    "require '",     # Ruby: require 'x'
+    "use ",          # Rust, PHP, Perl
+    "using ",        # C#
+    "extern crate",  # Rust (old)
+]
 
 class ProjectIndexer:
     def __init__(self, persist_dir: str, model_name: str = "all-MiniLM-L6-v2"):
@@ -18,6 +32,7 @@ class ProjectIndexer:
         print(f"[RAG] Model loaded.")
 
     def chunk_file_content(self, file_path: str, content: str, max_lines: int = 500) -> list[str]:
+        """Chia file thành các chunks theo số dòng."""
         lines = content.split('\n')
         chunks = []
         for i in range(0, len(lines), max_lines):
@@ -26,6 +41,40 @@ class ProjectIndexer:
             chunk = f"### File: {file_path} (lines {i+1}-{min(i+max_lines, len(lines))})\n```\n{chunk_content}\n```\n"
             chunks.append(chunk)
         return chunks
+
+    def _extract_import_chunk(self, file_path: str, content: str) -> str | None:
+        """
+        Trích xuất các dòng import/include/require/use từ source code.
+        Dùng chung bộ keywords cho mọi ngôn ngữ, không cần if/else.
+        Trả về chunk text hoặc None nếu không có import nào.
+        """
+        import_lines = []
+        in_import_block = False  # Cho Go: import ( ... )
+        for line in content.split('\n'):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("//") or stripped.startswith("#!"):
+                continue
+            
+            # Handle Go multi-line import block: import ( ... )
+            if in_import_block:
+                import_lines.append(stripped)
+                if stripped == ")":
+                    in_import_block = False
+                continue
+            
+            for keyword in IMPORT_KEYWORDS:
+                if stripped.startswith(keyword) or stripped.startswith("const ") and "require(" in stripped:
+                    import_lines.append(stripped)
+                    # Bắt đầu Go import block
+                    if stripped == "import (":
+                        in_import_block = True
+                    break
+        
+        if not import_lines:
+            return None
+        
+        import_text = '\n'.join(import_lines)
+        return f"### File: {file_path} (imports/dependencies)\n```\n{import_text}\n```\n"
 
     def _get_file_hash(self, file_path: Path) -> str:
         with open(file_path, "rb") as f:
@@ -85,15 +134,24 @@ class ProjectIndexer:
         for file_path, rel_path, file_hash in tqdm(files_to_index, desc="Reading and Chunking"):
             try:
                 content = file_path.read_text(encoding="utf-8", errors="ignore")
+                
+                # Chunk 1: Tách riêng phần imports/dependencies (nếu có)
+                import_chunk = self._extract_import_chunk(rel_path, content)
+                if import_chunk:
+                    sanitized = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', rel_path)
+                    idx = f"{sanitized}_imports"
+                    ids_to_add.append(idx)
+                    texts_to_add.append(import_chunk)
+                    metadatas_to_add.append({"file_path": rel_path, "hash": file_hash, "chunk_index": -1, "chunk_type": "imports"})
+                
+                # Chunk 2+: Các chunks code bình thường (theo số dòng)
                 chunks = self.chunk_file_content(rel_path, content, max_lines=chunk_max_lines)
                 for i, chunk in enumerate(chunks):
-                    # sanitize id
-                    import re
-                    sanitized_rel_path = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', rel_path)
-                    idx = f"{sanitized_rel_path}_{i}"
+                    sanitized = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', rel_path)
+                    idx = f"{sanitized}_{i}"
                     ids_to_add.append(idx)
                     texts_to_add.append(chunk)
-                    metadatas_to_add.append({"file_path": rel_path, "hash": file_hash, "chunk_index": i})
+                    metadatas_to_add.append({"file_path": rel_path, "hash": file_hash, "chunk_index": i, "chunk_type": "code"})
             except Exception as e:
                 print(f"[RAG] Error reading {rel_path}: {e}")
 
