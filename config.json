@@ -1,0 +1,32 @@
+{
+    "chatgpt_url": "https://chatgpt.com",
+    "prompt_selector": "#prompt-textarea",
+    "send_key": "Enter",
+    "response_selector": ".markdown.prose",
+    "wait_timeout": 60000,
+    "response_stable_delay": 3000,
+    "headless": false,
+    "browser_type": "chromium",
+    "project_root": ".",
+    "file_extensions": [
+        ".py",
+        ".java",
+        ".js",
+        ".ts",
+        ".go",
+        ".c",
+        ".cpp",
+        ".h",
+        ".rs"
+    ],
+    "exclude_dirs": [
+        "node_modules",
+        ".git",
+        "__pycache__",
+        "venv",
+        ".venv",
+        "dist",
+        "build"
+    ],
+    "max_context_chars": 100000
+}

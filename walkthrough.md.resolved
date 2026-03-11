@@ -1,0 +1,40 @@
+# Walkthrough - AI Agent (Python + Playwright)
+
+## Tổng quan
+
+Đã tạo agent tự động hoá tương tác với ChatGPT nội bộ qua browser, thay thế việc paste text thủ công.
+
+## Files đã tạo
+
+| File | Mô tả |
+|------|--------|
+| [agent.py](file:///media/hieutt/Data/workspace/1.ai-karate-agent/agent.py) | Script chính - đọc project, mở browser, gửi prompt, nhận response |
+| [config.json](file:///media/hieutt/Data/workspace/1.ai-karate-agent/config.json) | Config: URL, selectors, timeouts, extensions |
+| [requirements.txt](file:///media/hieutt/Data/workspace/1.ai-karate-agent/requirements.txt) | Dependency: `playwright` |
+| [README.md](file:///media/hieutt/Data/workspace/1.ai-karate-agent/README.md) | Hướng dẫn cài đặt & sử dụng |
+
+## Tính năng chính
+
+- **Đọc project context** tự động (quét files theo extension, có giới hạn ký tự)
+- **Browser automation**: fill textarea `#prompt-textarea` → press Enter
+- **Smart response wait**: chờ text ổn định (không thay đổi 2 lần liên tiếp) trước khi trả kết quả
+- **Login support**: pause để user login thủ công trên browser trước khi bắt đầu
+- **Interactive & single-shot mode**
+- **Fallback**: tự chuyển từ `fill()` sang `keyboard.insert_text()` nếu textarea dùng `contenteditable`
+
+## Setup cần làm
+
+```bash
+# 1. Cài đặt
+cd /media/hieutt/Data/workspace/1.ai-karate-agent
+pip install -r requirements.txt
+playwright install chromium
+
+# 2. Sửa config.json
+#    - chatgpt_url → URL ChatGPT nội bộ thực
+#    - response_selector → inspect bằng F12 để tìm đúng selector
+#    - project_root → đường dẫn project cần đọc context
+
+# 3. Chạy
+python agent.py
+```
