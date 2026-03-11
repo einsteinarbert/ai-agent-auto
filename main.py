@@ -17,6 +17,11 @@ import sys
 import time
 from pathlib import Path
 
+# Patch asyncio để cho phép nested event loops
+# (Playwright và prompt_toolkit đều dùng asyncio, cần cho phép chạy lồng nhau)
+import nest_asyncio
+nest_asyncio.apply()
+
 from playwright.sync_api import sync_playwright, Page, Browser
 
 
@@ -258,6 +263,15 @@ def wait_and_get_response(page: Page, config: dict) -> str:
 
 def interactive_loop(page: Page, config: dict, context: str, retriever=None):
     """Vòng lặp hỏi-đáp tương tác."""
+    from input_handler import create_prompt_session, get_multiline_input, parse_file_references
+
+    project_root = config.get("project_root", ".")
+    session, completer = create_prompt_session(
+        project_root=project_root,
+        extensions=config.get("file_extensions", [".py"]),
+        exclude_dirs=config.get("exclude_dirs", [])
+    )
+
     print("\n" + "=" * 60)
     print("  AI Agent - ChatGPT Nội Bộ")
     print("  Gõ 'quit' hoặc 'exit' để thoát")
@@ -265,14 +279,15 @@ def interactive_loop(page: Page, config: dict, context: str, retriever=None):
         print("  Gõ 'reindex' để cập nhật index code (RAG)")
     else:
         print("  Gõ 'context' để xem project context đã load")
+    print("  Dùng @<tên file> để đính kèm file vào câu hỏi")
+    print("  Alt+Enter (hoặc Esc rồi Enter) = xuống dòng | Enter = gửi")
     print("=" * 60 + "\n")
 
     conversation_count = 0
 
     while True:
-        try:
-            question = input("\n🤖 Câu hỏi: ").strip()
-        except (KeyboardInterrupt, EOFError):
+        question = get_multiline_input(session)
+        if question is None:
             print("\n[INFO] Thoát agent.")
             break
 
@@ -299,18 +314,24 @@ def interactive_loop(page: Page, config: dict, context: str, retriever=None):
                 exclude_dirs=config.get("exclude_dirs", []),
                 chunk_max_lines=rag_config.get("chunk_max_lines", 500)
             )
+            completer.refresh_cache()  # Cập nhật danh sách file
             print("[INFO] ✓ Re-index hoàn tất.")
             continue
 
-        # Với RAG, ta gửi câu nào cũng kèm context liên quan. Không RAG thì chỉ gửi câu đầu.
-        if retriever:
+        # Xử lý @file reference: tách file được ref và đọc nội dung
+        clean_question, file_context = parse_file_references(question, project_root)
+
+        # Nếu có @file, ưu tiên context từ file được ref
+        if file_context:
+            prompt = build_prompt(file_context, clean_question)
+        elif retriever:
             rag_config = config.get("rag", {})
             rag_context = retriever.search(
-                question, 
+                clean_question, 
                 top_k=rag_config.get("top_k", 5),
                 max_distance=rag_config.get("max_distance", 1.4)
             )
-            prompt = build_prompt(rag_context, question)
+            prompt = build_prompt(rag_context, clean_question)
             if "Không tìm thấy" in rag_context:
                 print("[INFO] RAG: Câu hỏi không liên quan đến source code. Đã skip context.")
             else:

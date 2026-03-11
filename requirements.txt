@@ -2,3 +2,5 @@ playwright>=1.40.0
 sentence-transformers
 chromadb
 tqdm
+prompt_toolkit
+nest_asyncio

@@ -36,7 +36,7 @@
         "model_name": "all-MiniLM-L6-v2",
         "top_k": 5,
         "chunk_max_lines": 500,
-        "max_distance": 1.4,
+        "max_distance": 1.2,
         "chroma_persist_dir": ".chroma_db"
     }
 }
